@@ -1,12 +1,44 @@
 import logging
-from label_studio_sdk.converter.utils import convert_annotation_to_yolo, convert_annotation_to_yolo_obb
+from label_studio_sdk.converter.utils import (
+    convert_annotation_to_yolo,
+    convert_annotation_to_yolo_obb,
+)
 from label_studio_sdk.converter.keypoints import build_kp_order
+from label_studio_sdk.converter.exports.brush_to_coco import generate_contour_from_rle
 
 logger = logging.getLogger(__name__)
 
 def process_keypoints_for_yolo(labels, label_path,
                                category_name_to_id, categories,
                                is_obb, kp_order):
+    # First handle segmentation masks encoded as RLE. These annotations usually
+    # come with `format` set to 'rle' and don't contain bounding boxes.
+    mask_items = [item for item in labels if item.get('format') == 'rle' and 'rle' in item]
+    if mask_items:
+        lines = []
+        for item in mask_items:
+            label_name = item.get('keypointlabels', item.get('brushlabels', []))[0]
+            class_idx = category_name_to_id.get(label_name)
+            if class_idx is None:
+                class_idx = len(categories)
+                category_name_to_id[label_name] = class_idx
+                categories.append({'id': class_idx, 'name': label_name})
+
+            segmentations, _, _ = generate_contour_from_rle(
+                item['rle'], item['original_width'], item['original_height']
+            )
+            for seg in segmentations:
+                norm = []
+                for idx, val in enumerate(seg):
+                    if idx % 2 == 0:
+                        norm.append(val / item['original_width'])
+                    else:
+                        norm.append(val / item['original_height'])
+                lines.append(' '.join(map(str, [class_idx] + norm)))
+
+        with open(label_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(lines))
+        return
     class_map = {c['name']: c['id'] for c in categories}
 
     rectangles = {}
